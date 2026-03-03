@@ -1,50 +1,69 @@
-import uuid
-import tempfile
-import shutil
 import os
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+import uuid
+import shutil
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import List
-from app.models.schemas import QueryRequest, QueryResponse, UploadResponse, Source
-from app.services.ingestion import process_pdfs
-from app.services.llm_service import get_rag_response
+from backend.app.models.schemas import QueryRequest, QueryResponse, UploadResponse, Source
+from backend.app.services.ingestion import IngestionService
+from backend.app.services.vector_store import VectorStoreService
+from backend.app.services.llm_service import LLMService
+from backend.app.core.config import settings
 
 router = APIRouter()
+ingestion_service = IngestionService()
+vector_store_service = VectorStoreService()
+llm_service = LLMService()
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_documents(files: List[UploadFile] = File(...), session_id: str = Form(None)):
+async def upload_documents(files: List[UploadFile] = File(...), session_id: str = None):
     if not session_id:
         session_id = str(uuid.uuid4())
     
-    temp_files = []
-    filenames = []
+    session_dir = os.path.join(settings.STORAGE_DIR, f"tmp_{session_id}")
+    os.makedirs(session_dir, exist_ok=True)
     
-    try:
-        for file in files:
-            if not file.filename.lower().endswith(".pdf"):
-                continue
+    filenames = []
+    all_chunks = []
+    
+    for file in files:
+        if not file.filename.endswith(".pdf"):
+            continue
             
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-            shutil.copyfileobj(file.file, temp_file)
-            temp_file.close()
-            temp_files.append(temp_file)
-            filenames.append(file.filename)
+        file_path = os.path.join(session_dir, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
         
-        if not temp_files:
-            raise HTTPException(status_code=400, detail="No valid PDF files uploaded.")
-            
-        processed_files = process_pdfs(temp_files, filenames, session_id)
-        
-    finally:
-        for temp_file in temp_files:
-            if os.path.exists(temp_file.name):
-                os.remove(temp_file.name)
-                
-    return UploadResponse(session_id=session_id, files=processed_files)
+        chunks = ingestion_service.process_pdf(file_path, file.filename)
+        all_chunks.extend(chunks)
+        filenames.append(file.filename)
+    
+    if all_chunks:
+        vector_store_service.create_or_update_index(session_id, all_chunks)
+    
+    # Cleanup temp files
+    shutil.rmtree(session_dir)
+    
+    return UploadResponse(session_id=session_id, filenames=filenames, status="processed")
 
 @router.post("/query", response_model=QueryResponse)
 async def query_documents(request: QueryRequest):
-    answer, sources = get_rag_response(request.session_id, request.query)
+    relevant_docs = vector_store_service.search(request.session_id, request.query)
     
-    formatted_sources = [Source(document=s["document"], page=s["page"]) for s in sources]
+    if not relevant_docs:
+        return QueryResponse(
+            answer="No documents found for this session. Please upload PDFs first.",
+            sources=[]
+        )
     
-    return QueryResponse(answer=answer, sources=formatted_sources)
+    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+    answer = await llm_service.get_response(request.query, context)
+    
+    sources = []
+    seen_sources = set()
+    for doc in relevant_docs:
+        src_key = f"{doc.metadata['source']}_{doc.metadata['page_number']}"
+        if src_key not in seen_sources:
+            sources.append(Source(document=doc.metadata['source'], page=doc.metadata['page_number']))
+            seen_sources.add(src_key)
+            
+    return QueryResponse(answer=answer, sources=sources)
