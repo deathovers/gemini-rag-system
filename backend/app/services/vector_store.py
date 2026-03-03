@@ -1,23 +1,30 @@
 import os
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from app.core.config import settings
+from backend.app.core.config import settings
 
-def get_embeddings():
-    return GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GOOGLE_API_KEY)
+class VectorStoreService:
+    def __init__(self):
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
-def get_index_path(session_id: str):
-    path = os.path.join(settings.STORAGE_DIR, session_id)
-    if not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
-    return path
+    def get_index_path(self, session_id: str):
+        return os.path.join(settings.STORAGE_DIR, session_id)
 
-def save_vector_store(vector_store: FAISS, session_id: str):
-    path = get_index_path(session_id)
-    vector_store.save_local(path)
+    def create_or_update_index(self, session_id: str, documents):
+        index_path = self.get_index_path(session_id)
+        
+        if os.path.exists(os.path.join(index_path, "index.faiss")):
+            vectorstore = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
+            vectorstore.add_documents(documents)
+        else:
+            vectorstore = FAISS.from_documents(documents, self.embeddings)
+        
+        vectorstore.save_local(index_path)
 
-def load_vector_store(session_id: str):
-    path = get_index_path(session_id)
-    if os.path.exists(os.path.join(path, "index.faiss")):
-        return FAISS.load_local(path, get_embeddings(), allow_dangerous_deserialization=True)
-    return None
+    def search(self, session_id: str, query: str, k: int = 5):
+        index_path = self.get_index_path(session_id)
+        if not os.path.exists(index_path):
+            return []
+        
+        vectorstore = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
+        return vectorstore.similarity_search(query, k=k)
