@@ -1,30 +1,30 @@
 import os
-from langchain_community.vectorstores import FAISS
+from langchain.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from backend.app.core.config import settings
 
 class VectorStoreService:
-    def __init__(self):
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    @staticmethod
+    def get_embeddings():
+        return GoogleGenerativeAIEmbeddings(
+            model=settings.EMBEDDING_MODEL,
+            google_api_key=settings.GOOGLE_API_KEY
+        )
 
-    def get_index_path(self, session_id: str):
-        return os.path.join(settings.STORAGE_DIR, session_id)
-
-    def create_or_update_index(self, session_id: str, documents):
-        index_path = self.get_index_path(session_id)
+    @staticmethod
+    def create_index(session_id: str, documents):
+        embeddings = VectorStoreService.get_embeddings()
+        vector_store = FAISS.from_documents(documents, embeddings)
         
-        if os.path.exists(os.path.join(index_path, "index.faiss")):
-            vectorstore = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
-            vectorstore.add_documents(documents)
-        else:
-            vectorstore = FAISS.from_documents(documents, self.embeddings)
-        
-        vectorstore.save_local(index_path)
+        index_path = os.path.join(settings.STORAGE_DIR, session_id)
+        vector_store.save_local(index_path)
+        return vector_store
 
-    def search(self, session_id: str, query: str, k: int = 5):
-        index_path = self.get_index_path(session_id)
+    @staticmethod
+    def load_index(session_id: str):
+        index_path = os.path.join(settings.STORAGE_DIR, session_id)
         if not os.path.exists(index_path):
-            return []
+            return None
         
-        vectorstore = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
-        return vectorstore.similarity_search(query, k=k)
+        embeddings = VectorStoreService.get_embeddings()
+        return FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
