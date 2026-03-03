@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from app.api.endpoints import router as api_router
 from fastapi.middleware.cors import CORSMiddleware
+from backend.app.api.endpoints import router
 
 app = FastAPI(title="DocuChat AI API")
 
@@ -12,8 +12,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_router, prefix="/api")
+app.include_router(router)
 
-@app.get("/")
-async def root():
-    return {"message": "DocuChat AI API is running"}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
