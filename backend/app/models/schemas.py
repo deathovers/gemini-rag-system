@@ -15,4 +15,5 @@ class QueryResponse(BaseModel):
 
 class UploadResponse(BaseModel):
     session_id: str
-    files: List[str]
+    filenames: List[str]
+    status: str
