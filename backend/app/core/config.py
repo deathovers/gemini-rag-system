@@ -9,3 +9,6 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 settings = Settings()
+
+if not os.path.exists(settings.STORAGE_DIR):
+    os.makedirs(settings.STORAGE_DIR)
